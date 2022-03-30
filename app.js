@@ -1,13 +1,12 @@
 const bodyParser = require("body-parser");
 const express = require("express");
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const sharp = require('sharp');
 const { S3 } = require("@aws-sdk/client-s3");
 const { v4: uuidv4 } = require('uuid');
 
 const ENDPOINT = 'https://s3.us-west-004.backblazeb2.com';
+const TN_SUFFIX = '_tn.jpg';
 
 // Never, ever, ever put credentials in code!
 require('dotenv').config()
@@ -31,52 +30,46 @@ const splitPath = (fullpath) => {
   return [bucket, path];
 }
 
-const tmpFilename = () => {
-  return path.join(os.tmpdir(), uuidv4());
-}
-
 router.post('/',async (request,response) => {
+  // Don't make thumbnails of thumbnails!
+  if (request.body.url.endsWith(TN_SUFFIX)) {
+    response.json({
+      url: request.body.url
+    });    
+  }
+
   // Extract the bucket and key from the incoming URL
   const inputUrl = new URL(request.body.url);
   const [bucket, key] = splitPath(inputUrl.pathname);
 
-  let filename = null;
-
   try {
+    console.log(`Fetching image from ${inputUrl}`);
+    const obj = await client.getObject({
+      Bucket: bucket,
+      Key: key
+    });
+
     // Create a Sharp transformer into which we can stream image data
     const transformer = sharp()
       .rotate()
       .resize(240)
       .jpeg();
 
-    // Get a readable stream for the image
-    const obj = await client.getObject({
-      Bucket: bucket,
-      Key: key
-    });
+    // Pipe the image data into the transformer
+    obj.Body.pipe(transformer);
 
-    // Need to stream transformer output to a local file, since we 
-    // can't do putObject() without the content length
-    filename = tmpFilename();
+    // We can read the transformer output into a buffer, since we know 
+    // thumbnails are small enough to fit in memory
+    const thumbnail = await transformer.toBuffer();
 
-    console.log(`Streaming image from ${inputUrl}, through transformer, into ${filename}`);
-
-    // Pipe the object through the transformer into the tmp file
-    // and wait until it's all done
-    await new Promise((resolve, reject) => {
-      const pipe = obj.Body.pipe(transformer).pipe(fs.createWriteStream(filename));
-      pipe.on('error', reject);
-      pipe.on('close', resolve);
-    })
-
-    const outputKey = `${path.parse(key).name}_tn.jpg`;
+    const outputKey = path.parse(key).name + TN_SUFFIX;
     const outputUrl = path.join(ENDPOINT, bucket, outputKey);
-    console.log(`Writing thumbnail to ${outputUrl}`);
 
+    console.log(`Writing thumbnail to ${outputUrl}`);
     await client.putObject({
       Bucket: bucket,
       Key: key,
-      Body: fs.createReadStream(filename)
+      Body: thumbnail
     });
 
     response.json({
@@ -85,11 +78,6 @@ router.post('/',async (request,response) => {
   } catch (err) {
     console.log(err);
     response.sendStatus(500).end();    
-  } finally {
-    if (filename) {
-      fs.unlinkSync(filename);
-      console.log(`Deleted ${filename}`);      
-    }
   }
 });
 
