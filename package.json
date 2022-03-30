@@ -1,0 +1,20 @@
+{
+  "name": "risingcloud-demo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "run": "node app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Pat Patterson <pat@backblaze.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.58.0",
+    "body-parser": "^1.19.2",
+    "dotenv": "^16.0.0",
+    "express": "^4.17.3",
+    "sharp": "^0.30.3",
+    "uuid": "^8.3.2"
+  }
+}
