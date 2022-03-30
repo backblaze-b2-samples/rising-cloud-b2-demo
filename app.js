@@ -35,63 +35,49 @@ const tmpFilename = () => {
   return path.join(os.tmpdir(), uuidv4());
 }
 
-const downloadToTmp = async (bucket, key) => {
-  // Create a writeable stream to a temporary file
-  const filename = tmpFilename();
-  const file = fs.createWriteStream(filename);
-
-  // Get a readable stream for the object
-  const obj = await client.getObject({
-    Bucket: bucket,
-    Key: key
-  });
-
-  // Pipe the object into the temporary file
-  const pipe = obj.Body.pipe(file);
-
-  return new Promise((resolve, reject) => {
-    pipe.on('error', reject);
-    pipe.on('close', () => {
-      resolve(filename);
-    });
-  });
-}
-
-const upload = (filename, bucket, key) => {
-  return client.putObject({
-    Bucket: bucket,
-    Key: key,
-    Body: fs.createReadStream(filename)
-  });
-}
-
 router.post('/',async (request,response) => {
   // Extract the bucket and key from the incoming URL
   const inputUrl = new URL(request.body.url);
   const [bucket, key] = splitPath(inputUrl.pathname);
 
-  let inputFilename = null;
-  let outputFilename = null;
+  let filename = null;
 
   try {
-    console.log(`Downloading image from ${inputUrl}`);
-
-    inputFilename = await downloadToTmp(bucket, key);
-    console.log(`Wrote image to ${inputFilename}`);
-
-    outputFilename = tmpFilename();
-    const result = await sharp(inputFilename)
+    // Create a Sharp transformer into which we can stream image data
+    const transformer = sharp()
       .rotate()
       .resize(240)
-      .jpeg()
-      .toFile(outputFilename);
-    console.log(`Resized image to ${outputFilename}`);
+      .jpeg();
+
+    // Get a readable stream for the image
+    const obj = await client.getObject({
+      Bucket: bucket,
+      Key: key
+    });
+
+    // Need to stream transformer output to a local file, since we 
+    // can't do putObject() without the content length
+    filename = tmpFilename();
+
+    console.log(`Streaming image from ${inputUrl}, through transformer, into ${filename}`);
+
+    // Pipe the object through the transformer into the tmp file
+    // and wait until it's all done
+    await new Promise((resolve, reject) => {
+      const pipe = obj.Body.pipe(transformer).pipe(fs.createWriteStream(filename));
+      pipe.on('error', reject);
+      pipe.on('close', resolve);
+    })
 
     const outputKey = `${path.parse(key).name}_tn.jpg`;
-    await upload(outputFilename, bucket, outputKey);
-
     const outputUrl = path.join(ENDPOINT, bucket, outputKey);
-    console.log(`Uploaded thumbnail to ${outputUrl}`);
+    console.log(`Writing thumbnail to ${outputUrl}`);
+
+    await client.putObject({
+      Bucket: bucket,
+      Key: key,
+      Body: fs.createReadStream(filename)
+    });
 
     response.json({
       url: outputUrl
@@ -100,13 +86,9 @@ router.post('/',async (request,response) => {
     console.log(err);
     response.sendStatus(500).end();    
   } finally {
-    if (inputFilename) {
-      fs.unlinkSync(inputFilename);
-      console.log(`Deleted ${inputFilename}`);      
-    }
-    if (outputFilename) {
-      fs.unlinkSync(outputFilename);
-      console.log(`Deleted ${outputFilename}`);      
+    if (filename) {
+      fs.unlinkSync(filename);
+      console.log(`Deleted ${filename}`);      
     }
   }
 });
