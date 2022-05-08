@@ -1,0 +1,8 @@
+{
+  "contentLength": 3015523,
+  "contentType": "image/png",
+  "method": "PUT",
+  "signatureTimestamp": "20220224T193204Z",
+  "status": 200,
+  "url": "https://s3.us-west-001.backblazeb2.com/my-bucket/image001.png"
+}
