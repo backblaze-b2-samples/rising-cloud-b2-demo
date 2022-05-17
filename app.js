@@ -1,51 +1,58 @@
 const bodyParser = require("body-parser");
 const express = require("express");
-const path = require('path');
 const sharp = require('sharp');
 const { S3 } = require("@aws-sdk/client-s3");
 const { v4: uuidv4 } = require('uuid');
 
-// Change this to match your Backblaze B2 account
-const ENDPOINT = 'https://s3.us-west-004.backblazeb2.com';
+// Never, ever, ever put credentials in code!
+require('dotenv').config();
 
-const TN_SUFFIX = '_tn.jpg';
+// Read configuration from the environment
+const B2_ENDPOINT = process.env.B2_ENDPOINT;
+const RESIZE_OPTIONS = JSON.parse(process.env.RESIZE_OPTIONS);
 
-// Helper function to split an incoming path into the bucket
-// and the remainder of the path
+const TN_SUFFIX = '_tn';
+
+// Helper function to split an incoming path into the bucket,
+// the remainder of the path (excluding any extension) and the
+// extension (if present).
 // e.g. '/my-bucket/path/to/image.png'
-// is split into 'my-bucket' and 'path/to/image.png'
+// is split into 'my-bucket', 'path/to/image' and 'png'
 // URI-decodes path to handle keys with spaces
 const splitPath = (fullpath) => {
-  // Skip the initial '/'
-  const index = fullpath.indexOf('/', 1);
-  let bucket = null;
-  let path = null;
+  // Skip the initial '/' to find separator between bucket and key
+  const separator = fullpath.indexOf('/', 1);
+  let bucket = null, basePath = null, extension = null;
 
-  if (index === -1) {
+  if (separator === -1) {
     // There's no object key
     if (fullpath.length > 1) {
       // There's only a bucket name
       bucket = fullpath.substring(1);
     }
   } else {
-    bucket = fullpath.substring(1, index);
-    path = decodeURIComponent(fullpath.substring(index + 1));
+    bucket = fullpath.substring(1, separator);
+    const path = decodeURIComponent(fullpath.substring(separator + 1));
+    const lastDot = path.lastIndexOf('.');
+    if (lastDot === -1) {
+      basePath = path;
+    } else {
+      basePath = path.substring(0, lastDot);
+      extension = path.substring(lastDot + 1)      
+    }
   }
 
-  return [bucket, path];
+  return [bucket, basePath, extension];
 }
 
-// Never, ever, ever put credentials in code!
-require('dotenv').config();
-
-// Extract region from ENDPOINT, as the S3 constructor requires it
+// Extract region from B2_ENDPOINT, as the S3 constructor requires it
 const regionRegexp = /https:\/\/s3\.([a-z0-9-]+)\.backblazeb2\.com/;
-const match = ENDPOINT.match(regionRegexp);
+const match = B2_ENDPOINT.match(regionRegexp);
 const region = match[1];
 
 // Create an S3 client object
 const client = new S3({
-  endpoint: ENDPOINT,
+  endpoint: B2_ENDPOINT,
   region: region
 });
 
@@ -60,7 +67,7 @@ router.post('/thumbnail', async (request,response) => {
 
   // Extract the bucket and key from the incoming URL
   const inputUrl = new URL(request.body.url);
-  const [bucket, key] = splitPath(inputUrl.pathname);
+  const [bucket, keyBase, extension] = splitPath(inputUrl.pathname);
 
   // Only process images
   // Only operate on PUTs
@@ -70,47 +77,47 @@ router.post('/thumbnail', async (request,response) => {
   if (!request.body.contentType
     || !request.body.contentType.startsWith('image/')
     || request.body.method !== 'PUT'
-    || !(bucket && key)
+    || !(bucket && keyBase)
     || !request.body.url
     || request.body.url.indexOf('?') !== -1
-    || request.body.url.endsWith(TN_SUFFIX)) {
+    || keyBase.endsWith(TN_SUFFIX)) {
     console.log(`Skipping ${JSON.stringify(request.body, null, 4)}`);
     response.sendStatus(204).end();
     return;    
   }
 
   try {
-    // Get the image from B2 (returns a readable stream)
+    // Get the image from B2 (returns a readable stream as the body)
     console.log(`Fetching image from ${inputUrl}`);
     const obj = await client.getObject({
       Bucket: bucket,
-      Key: key
+      Key: keyBase + (extension ? "." + extension : "")
     });
 
     // Create a Sharp transformer into which we can stream image data
     const transformer = sharp()
-      .rotate()
-      .resize(240)
-      .jpeg();
+      .rotate()                // Auto-orient based on the EXIF Orientation tag
+      .resize(RESIZE_OPTIONS); // Resize according to configured options
 
     // Pipe the image data into the transformer
     obj.Body.pipe(transformer);
 
     // We can read the transformer output into a buffer, since we know 
-    // thumbnails are small enough to fit in memory
+    // that thumbnails are small enough to fit in memory
     const thumbnail = await transformer.toBuffer();
 
-    // Remove any extension from incoming key and append '_tn.jpg'
-    const outputKey = path.parse(key).name + TN_SUFFIX;
-    const outputUrl = ENDPOINT + '/' + bucket + '/' + encodeURIComponent(outputKey);
+    // Remove any extension from the incoming key and append '_tn.<extension>'
+    const outputKey = keyBase + TN_SUFFIX + (extension ? "." + extension : "");
+    const outputUrl = B2_ENDPOINT + '/' + bucket + '/' 
+                        + encodeURIComponent(outputKey);
 
-    // Write the thumbnail buffer to B2
+    // Write the thumbnail buffer to the same B2 bucket as the original
     console.log(`Writing thumbnail to ${outputUrl}`);
     await client.putObject({
       Bucket: bucket,
       Key: outputKey,
       Body: thumbnail,
-      ContentType: 'image/jpeg'
+      ContentType: request.body.contentType
     });
 
     // We're done - reply with the thumbnail's URL
