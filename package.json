@@ -9,6 +9,9 @@
   },
   "author": "Pat Patterson <pat@backblaze.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",
     "body-parser": "^1.20.6",
