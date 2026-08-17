@@ -9,12 +9,15 @@
   },
   "author": "Pat Patterson <pat@backblaze.com>",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.58.0",
-    "body-parser": "^1.19.2",
+    "@aws-sdk/client-s3": "^3.1111.0",
+    "body-parser": "^1.20.6",
     "dotenv": "^16.0.0",
-    "express": "^4.17.3",
-    "sharp": "^0.30.3",
-    "uuid": "^8.3.2"
+    "express": "^4.22.2",
+    "sharp": "^0.35.3",
+    "uuid": "^11.1.1"
   }
 }
